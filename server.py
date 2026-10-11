@@ -3,7 +3,7 @@ ClinicDesk Trichoscopy Server
 OpenCV tabanlı saç analizi - internetsiz çalışır
 """
 
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import cv2
@@ -12,6 +12,7 @@ from PIL import Image
 import io
 import base64
 import math
+import os
 from typing import Optional
 
 app = FastAPI(title="ClinicDesk Trichoscopy", version="1.0.0")
@@ -24,6 +25,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# API anahtarı kontrolü - TRICHOSCOPY_API_KEY ayarlıysa /analyze, /calibrate, /thickness
+# uçlarına gelen her istekte doğru X-Api-Key header'ı zorunlu olur (ayarlı değilse kontrol atlanır,
+# böylece yerel geliştirme eskisi gibi çalışmaya devam eder).
+API_KEY = os.environ.get("TRICHOSCOPY_API_KEY")
+
+def verify_api_key(x_api_key: Optional[str] = Header(default=None)):
+    if API_KEY and x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 # ─── Yardımcı Fonksiyonlar ────────────────────────────────────────────────────
 
@@ -300,7 +310,7 @@ def root():
 def health():
     return {"status": "ok"}
 
-@app.post("/analyze")
+@app.post("/analyze", dependencies=[Depends(verify_api_key)])
 async def analyze(
     file: UploadFile = File(...),
     bolge: str = Form(default="Genel"),
@@ -368,7 +378,7 @@ async def analyze(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/calibrate")
+@app.post("/calibrate", dependencies=[Depends(verify_api_key)])
 async def calibrate_only(
     file: UploadFile = File(...),
     real_size_mm: float = Form(default=10.0),
@@ -410,7 +420,7 @@ async def calibrate_only(
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
-@app.post("/thickness")
+@app.post("/thickness", dependencies=[Depends(verify_api_key)])
 async def measure_thickness_only(
     file: UploadFile = File(...),
     microns_per_pixel: float = Form(default=0.45),
