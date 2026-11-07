@@ -266,9 +266,11 @@ def calculate_statistics(hair_data: list, microns_per_pixel: float, area_cm2: fl
 
 def create_visualization(img: np.ndarray, hair_data: list, square=None) -> str:
     """
-    Tespit edilen saçları görselleştir, base64 döndür
+    Tespit edilen saçları HairMetrix tarzı halka (ring) işaretleriyle göster,
+    alt kısımda kalınlık dağılım barı ve renk anahtarı ekle, base64 döndür.
     """
     vis = img.copy()
+    img_h, img_w = vis.shape[:2]
 
     # 1cm² damgayı çiz
     if square:
@@ -280,23 +282,71 @@ def create_visualization(img: np.ndarray, hair_data: list, square=None) -> str:
             (square['x'], square['y'] - 10),
             cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-    # Saç tellerini işaretle
-    for i, hair in enumerate(hair_data):
+    # HairMetrix tarzı 4 kademeli kalınlık renklendirmesi (BGR)
+    CAT_COLORS = [
+        (60, 60, 220),    # <30µm   - kırmızı: minyatürize/vellus
+        (0, 215, 255),    # 30-60µm - sarı: ince terminal
+        (144, 238, 144),  # 60-90µm - açık yeşil: orta terminal
+        (34, 120, 34),    # >90µm   - koyu yeşil: kalın terminal
+    ]
+
+    def category_color(t):
+        if t < 30:
+            return CAT_COLORS[0]
+        elif t < 60:
+            return CAT_COLORS[1]
+        elif t < 90:
+            return CAT_COLORS[2]
+        return CAT_COLORS[3]
+
+    # Saç tellerini halka (ring) olarak işaretle
+    for hair in hair_data:
         cx, cy = int(hair['cx']), int(hair['cy'])
-        t = hair['thickness_um']
+        color = category_color(hair['thickness_um'])
+        cv2.circle(vis, (cx, cy), 5, color, 2)
 
-        # Renk: kalınlığa göre
-        if t < 60:
-            color = (0, 165, 255)   # turuncu = ince
-        elif t < 80:
-            color = (0, 255, 0)     # yeşil = orta
-        else:
-            color = (255, 0, 0)     # mavi = kalın
+    # ─── Alt şerit: kalınlık dağılım barı + renk anahtarı ──────────────────
+    bar_h = 56
+    strip = np.full((bar_h, img_w, 3), (24, 24, 24), dtype=np.uint8)
 
-        cv2.circle(vis, (cx, cy), 4, color, -1)
+    thicknesses = [hh['thickness_um'] for hh in hair_data]
+    t_min = min(thicknesses) if thicknesses else 0
+    t_max = max(thicknesses) if thicknesses else 0
+
+    bar_x0, bar_x1 = 50, max(60, img_w - 260)
+    bar_y0, bar_y1 = 16, 32
+    if bar_x1 > bar_x0:
+        seg_w = (bar_x1 - bar_x0) / 4
+        for i, c in enumerate(CAT_COLORS):
+            x_start = int(bar_x0 + i * seg_w)
+            x_end = int(bar_x0 + (i + 1) * seg_w) if i < 3 else bar_x1
+            cv2.rectangle(strip, (x_start, bar_y0), (x_end, bar_y1), c, -1)
+        cv2.putText(strip, f"{t_min:.0f}", (max(2, bar_x0 - 32), 30),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(strip, f"{t_max:.0f}", (bar_x1 + 6, 30),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(strip, "sac kalinligi (um)", (bar_x0, 50),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.38, (190, 190, 190), 1, cv2.LINE_AA)
+
+    legend = [
+        (CAT_COLORS[0], "<30 vellus"),
+        (CAT_COLORS[1], "30-60"),
+        (CAT_COLORS[2], "60-90"),
+        (CAT_COLORS[3], ">90um"),
+    ]
+    lx = max(bar_x1 + 60, img_w - 215)
+    for i, (c, label) in enumerate(legend):
+        bx = lx + i * 54
+        if bx + 14 > img_w:
+            break
+        cv2.rectangle(strip, (bx, 12), (bx + 14, 26), c, -1)
+        cv2.putText(strip, label, (bx - 6, 44),
+            cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1, cv2.LINE_AA)
+
+    vis_with_bar = np.vstack([vis, strip])
 
     # Görüntüyü base64'e çevir
-    _, buffer = cv2.imencode('.jpg', vis, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    _, buffer = cv2.imencode('.jpg', vis_with_bar, [cv2.IMWRITE_JPEG_QUALITY, 88])
     img_base64 = base64.b64encode(buffer).decode('utf-8')
     return img_base64
 
