@@ -239,8 +239,17 @@ def count_and_measure_hairs(thresh: np.ndarray, microns_per_pixel: float):
         thickness_px = min(bw, bh)
         thickness_um = thickness_px * microns_per_pixel
 
-        # Makul saç kalınlığı filtresi (10-200 µm)
-        if thickness_um < 10 or thickness_um > 200:
+        # Makul saç kalınlığı filtresi (10-200 µm baz alınır, orijinal varsayım
+        # ~0.45 µm/piksel gibi çok yüksek çözünürlüklü görüntüler için ayarlanmıştı).
+        # Damga (2x2cm) ile kalibrasyonda çözünürlük çok daha kaba olabiliyor
+        # (ör. ~50+ µm/piksel) - bu durumda bulanıklık/JPEG sıkıştırması yüzünden
+        # tek bir kıl piksel bazında birkaç piksel kalınlığında görünüyor ve sabit
+        # 200µm tavanını her zaman aşıyor, sonuç olarak TÜM saçlar elenip "0 saç"
+        # çıkıyordu. Üst sınırı çözünürlüğe göre esnetiyoruz ki kaba çözünürlükte
+        # de makul kalınlıktaki kıllar (birkaç piksel) elenmesin; gürültü/gölge gibi
+        # çok büyük bloklar yine de area/aspect_ratio filtrelerinden elenir.
+        max_thickness_um = max(200.0, microns_per_pixel * 6)
+        if thickness_um < 10 or thickness_um > max_thickness_um:
             continue
 
         # Uzunluk
