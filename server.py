@@ -65,14 +65,31 @@ def detect_square_marker_beyaz_kapak(img: np.ndarray):
     if hierarchy is None:
         return None
     hierarchy = hierarchy[0]
+    bright_bool = mask > 0
 
+    # NOT: Daha once burada "ebeveyn" (kapagin govdesi) konturunun GENEL
+    # bounding-box'inin da kare/yuvarlak ve dolgun olmasini istiyorduk. Bu,
+    # gercek fotograflarda kirilgan cikti: JPEG kalitesi/sikistirma biraz
+    # degisince (ör. ayni foto farkli kalitede kaydedilince), kapagin parlak
+    # maskesi kadrajin baska bir yerindeki alakasiz parlak bir bolgeyle
+    # (ör. sac teli, arka plan) birlesip govdenin GENEL bounding-box'ini
+    # genisletiyor, "extent" (dolgunluk) degerini dusurup gercek kapagi
+    # reddediyordu - ayni fotografin sadece sikistirma kalitesi farkli iki
+    # kopyasinda biri "damga tespit edildi" biri "varsayilan"a duserek
+    # tamamen farkli (ve yanlis) sonuclar uretiyordu. Bunun yerine, adayin
+    # HEMEN cevresindeki dar bir halkanin (kapagin govdesine ait olmasi
+    # beklenen bolge) ne kadarinin parlak oldugunu kontrol ediyoruz - bu,
+    # kadrajin uzak bir yerindeki alakasiz parlak bolgelerden etkilenmez.
+    min_area = max(500.0, 0.008 * h * w)
     candidates = []
     for i, cnt in enumerate(contours):
         parent = hierarchy[i][3]
         if parent == -1:
             continue  # sadece "delik" (parlak govdenin icindeki bosluk) konturlariyla ilgileniyoruz
         area = cv2.contourArea(cnt)
-        if area < 500 or area > (h * w * 0.3):
+        # Mutlak alan esigine ek olarak, kadraja oranla da makul buyuklukte
+        # olmali (ör. masa/zeminde kalan kucuk, alakasiz parlak bosluklari eler)
+        if area < min_area or area > (h * w * 0.3):
             continue
         x, y, bw, bh = cv2.boundingRect(cnt)
         ratio = float(bw) / bh if bh > 0 else 0
@@ -82,20 +99,18 @@ def detect_square_marker_beyaz_kapak(img: np.ndarray):
         if extent < 0.65:  # dolgun/kare olmali, ince/duzensiz seritler elenir
             continue
 
-        # Ebeveyn (kapagin govdesi) de makul olcude yuvarlak/kare olmali,
-        # deligi kenara yapismadan gercekten cevrelemeli (yanlis pozitifleri eler)
-        px, py, pw, ph = cv2.boundingRect(contours[parent])
-        parent_ratio = float(pw) / ph if ph > 0 else 0
-        if not (0.6 < parent_ratio < 1.6):
-            continue
-        parent_area = cv2.contourArea(contours[parent])
-        parent_extent = parent_area / float(pw * ph) if pw * ph else 0
-        if parent_extent < 0.5:
-            continue
-        margin = min(x - px, y - py, (px + pw) - (x + bw), (py + ph) - (y + bh))
-        if margin < 0.08 * min(pw, ph):
-            continue
-        if parent_area < area * 1.5:
+        # Yerel halka kontrolu: adayin hemen disindaki bandin buyuk kismi
+        # parlak mi (yani gercekten parlak bir govde tarafindan cevrili mi)?
+        ring_margin = max(3, int(round(0.25 * min(bw, bh))))
+        ox1 = max(0, x - ring_margin)
+        oy1 = max(0, y - ring_margin)
+        ox2 = min(w, x + bw + ring_margin)
+        oy2 = min(h, y + bh + ring_margin)
+        outer = bright_bool[oy1:oy2, ox1:ox2]
+        inner = bright_bool[y:y + bh, x:x + bw]
+        ring_px = outer.size - inner.size
+        ring_frac = (outer.sum() - inner.sum()) / ring_px if ring_px > 0 else 0
+        if ring_frac < 0.4:
             continue
 
         candidates.append({'area': area, 'x': x, 'y': y, 'w': bw, 'h': bh, 'cx': x + bw // 2, 'cy': y + bh // 2})
