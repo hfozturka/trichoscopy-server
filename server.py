@@ -43,9 +43,73 @@ def load_image(file_bytes: bytes) -> np.ndarray:
     img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
     return img
 
-def detect_square_marker(img: np.ndarray):
+def detect_square_marker_beyaz_kapak(img: np.ndarray):
     """
-    Mor/mavi marker kalemi ile çizilmiş kareyi tespit et
+    Klinikte fiilen kullanilan alet: beyaz/gumus metal kapakli, ortasinda kare
+    bir olcum penceresi olan bir loop (buyutec). Kapagin govdesi parlak ve
+    dusuk doygunlukta (beyaz/gumus); kare pencere ise icinden sacli deri
+    gorundugu icin kapagin govdesine gore belirgin derecede koyu/doygun kalir.
+    Kapagi "parlak govde + ortasinda delik (pencere)" seklinde tespit edip
+    o deligin sinirlayici kutusunu dondururuz.
+    """
+    h, w = img.shape[:2]
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    sat = hsv[:, :, 1]
+    val = hsv[:, :, 2]
+    mask = ((val > 150) & (sat < 70)).astype(np.uint8) * 255
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k)
+
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return None
+    hierarchy = hierarchy[0]
+
+    candidates = []
+    for i, cnt in enumerate(contours):
+        parent = hierarchy[i][3]
+        if parent == -1:
+            continue  # sadece "delik" (parlak govdenin icindeki bosluk) konturlariyla ilgileniyoruz
+        area = cv2.contourArea(cnt)
+        if area < 500 or area > (h * w * 0.3):
+            continue
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        ratio = float(bw) / bh if bh > 0 else 0
+        if not (0.6 < ratio < 1.6):
+            continue
+        extent = area / float(bw * bh) if bw * bh else 0
+        if extent < 0.65:  # dolgun/kare olmali, ince/duzensiz seritler elenir
+            continue
+
+        # Ebeveyn (kapagin govdesi) de makul olcude yuvarlak/kare olmali,
+        # deligi kenara yapismadan gercekten cevrelemeli (yanlis pozitifleri eler)
+        px, py, pw, ph = cv2.boundingRect(contours[parent])
+        parent_ratio = float(pw) / ph if ph > 0 else 0
+        if not (0.6 < parent_ratio < 1.6):
+            continue
+        parent_area = cv2.contourArea(contours[parent])
+        parent_extent = parent_area / float(pw * ph) if pw * ph else 0
+        if parent_extent < 0.5:
+            continue
+        margin = min(x - px, y - py, (px + pw) - (x + bw), (py + ph) - (y + bh))
+        if margin < 0.08 * min(pw, ph):
+            continue
+        if parent_area < area * 1.5:
+            continue
+
+        candidates.append({'area': area, 'x': x, 'y': y, 'w': bw, 'h': bh, 'cx': x + bw // 2, 'cy': y + bh // 2})
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: c['area'])
+
+
+def detect_square_marker_cizim(img: np.ndarray):
+    """
+    Eski yontem: mor/mavi marker kalemiyle elle cizilmis kareyi tespit et.
+    Klinikte fiilen kullanilan beyaz kapakli loop icin degil, olasi alternatif
+    bir kalibrasyon yontemi (elle cizilmis kare) icin yedek olarak tutuluyor.
     """
     h, w = img.shape[:2]
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
@@ -77,6 +141,15 @@ def detect_square_marker(img: np.ndarray):
     if not squares:
         return None
     return max(squares, key=lambda s: s['area'])
+
+
+def detect_square_marker(img: np.ndarray):
+    """
+    Once klinikte fiilen kullanilan beyaz kapakli loop'u tespit etmeyi dener;
+    bulamazsa (ör. baska bir kalibrasyon yontemi kullanildiysa) eski mor/mavi
+    marker-cizimi tespitine geri duser.
+    """
+    return detect_square_marker_beyaz_kapak(img) or detect_square_marker_cizim(img)
 
 def calibrate_from_square(square, real_size_mm: float = 20.0) -> float:
     """
