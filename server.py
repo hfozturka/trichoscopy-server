@@ -78,10 +78,10 @@ def detect_square_marker(img: np.ndarray):
         return None
     return max(squares, key=lambda s: s['area'])
 
-def calibrate_from_square(square, real_size_mm: float = 10.0) -> float:
+def calibrate_from_square(square, real_size_mm: float = 20.0) -> float:
     """
-    1cm² (10mm x 10mm) kareden piksel/µm kalibrasyonu
-    real_size_mm: gerçek boyut mm cinsinden (default 10mm = 1cm)
+    Kare damgadan piksel/µm kalibrasyonu
+    real_size_mm: gerçek boyut mm cinsinden (default 20mm = 2cm, klinikte kullanılan damga boyutu)
     """
     pixel_size = (square['w'] + square['h']) / 2  # ortalama piksel boyutu
     real_size_um = real_size_mm * 1000  # mm → µm
@@ -364,13 +364,13 @@ def health():
 async def analyze(
     file: UploadFile = File(...),
     bolge: str = Form(default="Genel"),
-    real_size_mm: float = Form(default=10.0),  # damga boyutu mm
+    real_size_mm: float = Form(default=20.0),  # damga boyutu mm
 ):
     """
     Ana analiz endpoint
     - file: görüntü dosyası
     - bolge: saçlı deri bölgesi (Ön/Arka/Sol/Sağ)
-    - real_size_mm: damga gerçek boyutu (default 10mm = 1cm)
+    - real_size_mm: damga gerçek boyutu (default 20mm = 2cm, klinikte kullanılan damga boyutu)
     """
     try:
         # Görüntü yükle
@@ -389,7 +389,7 @@ async def analyze(
             microns_per_pixel = calibrate_from_square(square, real_size_mm)
             calibration_method = "damga"
             area_px = square['w'] * square['h']
-            area_cm2 = 1.0  # damga = 1cm²
+            area_cm2 = (real_size_mm / 10.0) ** 2  # damga gerçek fiziksel boyutuna göre alan (cm²) - ONEMLI: sabit 1cm² varsayimi yogunlugu yanlis hesapliyordu
             roi = (square['x'], square['y'], square['w'], square['h'])
         else:
             # Damga bulunamadı - varsayılan kalibrasyon kullan
@@ -431,7 +431,7 @@ async def analyze(
 @app.post("/calibrate", dependencies=[Depends(verify_api_key)])
 async def calibrate_only(
     file: UploadFile = File(...),
-    real_size_mm: float = Form(default=10.0),
+    real_size_mm: float = Form(default=20.0),
 ):
     """
     Sadece kalibrasyon - damga tespiti ve µm/piksel hesabı
@@ -445,7 +445,7 @@ async def calibrate_only(
         if not square:
             return JSONResponse(status_code=404, content={
                 "error": "Damga tespit edilemedi",
-                "tip": "Görüntüde 1cm² kare damga olduğundan emin olun"
+                "tip": "Görüntüde 2x2cm kare damga olduğundan emin olun"
             })
 
         microns_per_pixel = calibrate_from_square(square, real_size_mm)
